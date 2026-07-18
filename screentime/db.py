@@ -24,6 +24,25 @@ def ensure_db() -> None:
             ON activity_samples(date_key, sample_time)
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS focus_samples (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sample_time TEXT NOT NULL,
+                date_key TEXT NOT NULL,
+                process_id INTEGER NOT NULL,
+                app_name TEXT NOT NULL,
+                executable_path TEXT,
+                window_title TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_focus_samples_date_app
+            ON focus_samples(date_key, app_name)
+            """
+        )
         conn.commit()
 
 

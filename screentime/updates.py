@@ -108,3 +108,16 @@ def check_for_update() -> UpdateInfo | None:
         }
     )
     return update
+
+
+def download_update(update: UpdateInfo) -> Path:
+    """Download the release installer locally; the tray app starts it only after a user click."""
+    download_dir = DATA_DIR / "updates"
+    download_dir.mkdir(parents=True, exist_ok=True)
+    installer_path = download_dir / INSTALLER_ASSET_NAME
+    request = Request(update.download_url, headers={"User-Agent": "Screen-Time-Tracker"})
+
+    with urlopen(request, timeout=60) as response:
+        installer_path.write_bytes(response.read())
+
+    return installer_path

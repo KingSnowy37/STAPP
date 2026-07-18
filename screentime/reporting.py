@@ -1,5 +1,7 @@
 from datetime import date, timedelta
+from collections import defaultdict
 
+from .activity import normalize_app_name
 from .db import get_connection
 
 
@@ -57,6 +59,26 @@ def get_all_days() -> list[tuple[str, int, int]]:
             """
         ).fetchall()
     return [(row[0], int(row[1]), int(row[2])) for row in rows]
+
+
+def get_top_apps_today(limit: int = 5) -> list[tuple[str, int]]:
+    today_key = date.today().isoformat()
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT app_name, COUNT(*) AS active_minutes
+            FROM focus_samples
+            WHERE date_key = ?
+            GROUP BY app_name
+            ORDER BY active_minutes DESC, app_name ASC
+            """,
+            (today_key,),
+        ).fetchall()
+    normalized_totals: dict[str, int] = defaultdict(int)
+    for app_name, active_minutes in rows:
+        normalized_totals[normalize_app_name(app_name)] += int(active_minutes)
+
+    return sorted(normalized_totals.items(), key=lambda item: (-item[1], item[0]))[:limit]
 
 
 def format_minutes(total_minutes: int) -> str:

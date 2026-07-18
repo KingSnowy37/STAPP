@@ -1,19 +1,21 @@
 import ctypes
 import logging
+import subprocess
 import threading
 import time
-import webbrowser
+from ctypes import wintypes
 from datetime import datetime
 
 import pystray
 from PIL import Image, ImageDraw
 
-from .activity import get_idle_seconds
+from .activity import FocusedApp, get_focused_app, get_idle_seconds
 from .db import ensure_db, get_connection
+from .live_timer import LiveTimerController
 from .paths import DATA_DIR, LOG_PATH
 from .report import open_report
 from .reporting import format_minutes, get_today_stats
-from .updates import check_for_update, get_available_update, is_check_due
+from .updates import check_for_update, download_update, get_available_update, is_check_due
 
 SAMPLE_INTERVAL_SECONDS = 60
 ACTIVE_IDLE_THRESHOLD_SECONDS = 5 * 60
@@ -47,6 +49,35 @@ def record_sample(now: datetime, idle_seconds: int, is_active: bool) -> None:
         conn.commit()
 
 
+def record_focus_sample(now: datetime, focused_app: FocusedApp) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO focus_samples (
+                sample_time, date_key, process_id, app_name, executable_path, window_title
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                now.isoformat(timespec="seconds"),
+                now.date().isoformat(),
+                focused_app.process_id,
+                focused_app.app_name,
+                focused_app.executable_path,
+                focused_app.window_title,
+            ),
+        )
+        conn.commit()
+
+
+def record_active_focus(now: datetime) -> None:
+    try:
+        focused_app = get_focused_app()
+        if focused_app:
+            record_focus_sample(now, focused_app)
+    except Exception as exc:
+        logging.exception("Focus sample failed: %s", exc)
+
+
 def sleep_until_next_minute() -> None:
     current_time = time.time()
     remainder = current_time % SAMPLE_INTERVAL_SECONDS
@@ -69,16 +100,19 @@ class TrackerService:
     def __init__(self) -> None:
         self.stop_event = threading.Event()
         self.thread = threading.Thread(target=self._run_loop, daemon=True)
+        self.live_timer = LiveTimerController()
 
     def start(self) -> None:
         configure_logging()
         ensure_db()
         logging.info("Tracker service started")
         self.thread.start()
+        self.live_timer.start()
 
     def stop(self) -> None:
         logging.info("Tracker service stopping")
         self.stop_event.set()
+        self.live_timer.stop()
         self.thread.join(timeout=5)
 
     def _run_loop(self) -> None:
@@ -88,6 +122,8 @@ class TrackerService:
                 idle_seconds = get_idle_seconds()
                 is_active = idle_seconds < ACTIVE_IDLE_THRESHOLD_SECONDS
                 record_sample(now, idle_seconds, is_active)
+                if is_active:
+                    record_active_focus(now)
                 logging.info(
                     "Recorded sample active=%s idle_seconds=%s",
                     is_active,
@@ -108,8 +144,15 @@ def _seconds_until_next_minute() -> int:
 
 
 def _open_report_from_tray(icon: pystray.Icon, item: pystray.MenuItem) -> None:
-    del icon, item
-    open_report()
+    del item
+    try:
+        open_report()
+    except Exception as exc:
+        logging.exception("Report launch failed: %s", exc)
+        icon.notify(
+            "The report could not be opened. Details were saved to the local log.",
+            "Screen Time Tracker",
+        )
 
 
 def _today_total_label(item: pystray.MenuItem) -> str:
@@ -124,11 +167,26 @@ def _update_label(item: pystray.MenuItem) -> str:
     return f"Update available: v{update.version}" if update else "Check for updates"
 
 
-def _open_update_download(icon: pystray.Icon, item: pystray.MenuItem) -> None:
-    del icon, item
-    update = get_available_update()
-    if update:
-        webbrowser.open(update.download_url or update.release_url)
+def _install_update_from_tray(service: TrackerService):
+    def handler(icon: pystray.Icon, item: pystray.MenuItem) -> None:
+        del item
+        update = get_available_update()
+        if not update:
+            return
+
+        def install() -> None:
+            try:
+                installer_path = download_update(update)
+                service.stop()
+                subprocess.Popen([str(installer_path)])
+                icon.stop()
+            except Exception as exc:
+                logging.exception("Update install failed: %s", exc)
+                icon.notify("The update could not be downloaded.", "Screen Time Tracker")
+
+        threading.Thread(target=install, daemon=True).start()
+
+    return handler
 
 
 def _has_update(item: pystray.MenuItem) -> bool:
@@ -172,9 +230,20 @@ def _quit_from_tray(service: TrackerService):
 
 
 def run_tray_app() -> None:
-    ctypes.set_last_error(0)
-    mutex_handle = ctypes.windll.kernel32.CreateMutexW(None, False, TRACKER_MUTEX_NAME)
-    if ctypes.get_last_error() == ERROR_ALREADY_EXISTS:
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel32.CreateMutexW.restype = wintypes.HANDLE
+    kernel32.GetLastError.argtypes = []
+    kernel32.GetLastError.restype = wintypes.DWORD
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    mutex_handle = kernel32.CreateMutexW(None, False, TRACKER_MUTEX_NAME)
+    last_error = kernel32.GetLastError()
+    if not mutex_handle:
+        raise ctypes.WinError(last_error)
+    if last_error == ERROR_ALREADY_EXISTS:
+        kernel32.CloseHandle(mutex_handle)
         return
 
     service = TrackerService()
@@ -184,7 +253,7 @@ def run_tray_app() -> None:
         pystray.MenuItem(_today_total_label, None, enabled=False),
         pystray.MenuItem("Open report", _open_report_from_tray, default=True),
         pystray.MenuItem(_update_label, _check_for_updates_from_tray),
-        pystray.MenuItem("Download update", _open_update_download, visible=_has_update),
+        pystray.MenuItem("Install update", _install_update_from_tray(service), visible=_has_update),
         pystray.MenuItem("Quit", _quit_from_tray(service)),
     )
 
@@ -201,7 +270,7 @@ def run_tray_app() -> None:
         icon.run()
     finally:
         service.stop()
-        ctypes.windll.kernel32.CloseHandle(mutex_handle)
+        kernel32.CloseHandle(mutex_handle)
 
 
 def run_tracker() -> None:
@@ -215,6 +284,8 @@ def run_tracker() -> None:
             idle_seconds = get_idle_seconds()
             is_active = idle_seconds < ACTIVE_IDLE_THRESHOLD_SECONDS
             record_sample(now, idle_seconds, is_active)
+            if is_active:
+                record_active_focus(now)
             logging.info(
                 "Recorded sample active=%s idle_seconds=%s",
                 is_active,

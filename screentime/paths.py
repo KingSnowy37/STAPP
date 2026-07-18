@@ -16,5 +16,5 @@ else:
     DATA_DIR = APP_ROOT / "data"
 DB_PATH = DATA_DIR / "screentime.db"
 LOG_PATH = DATA_DIR / "tracker.log"
-REPORT_PATH = DATA_DIR / "report.html"
 UPDATE_STATE_PATH = DATA_DIR / "update_state.json"
+SETTINGS_PATH = DATA_DIR / "settings.json"
