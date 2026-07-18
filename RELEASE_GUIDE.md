@@ -6,9 +6,10 @@ This folder is a GitHub-ready copy of Screen Time Tracker. It contains source co
 
 1. Open `https://github.com/KingSnowy37/STAPP`.
 2. Upload the **contents** of this folder to the repository root. Do not create an extra `FOR RELEASE` folder inside the repository.
-3. Keep the existing `LICENSE` file in the repository.
-4. Commit the upload to the `main` branch.
-5. Create and push the tag `v1.0.0`. GitHub Actions will build the installer and publish it under Releases.
+3. Make sure `release.yml` ends up at `.github/workflows/release.yml`, not at the repository root. GitHub Actions only detects workflow files under `.github/workflows/` — if `release.yml` sits anywhere else, the build-and-attach job will silently never run. (Some upload flows flatten folders or hide dot-folders; if you're dragging files through the GitHub web UI, create the `.github` and `.github/workflows` folders explicitly and confirm the file landed there before moving on.)
+4. Keep the existing `LICENSE` file in the repository.
+5. Commit the upload to the `main` branch.
+6. Create and push the tag `v1.0.0`. GitHub Actions will build the installer and publish it under Releases.
 
 If you use Git from a local clone, run:
 
