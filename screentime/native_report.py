@@ -14,6 +14,7 @@ LIVE_TIMER_BUTTON_ID = 1004
 
 WM_COMMAND = 0x0111
 WM_DESTROY = 0x0002
+WM_SIZE = 0x0005
 WM_SYSCOMMAND = 0x0112
 WM_SETFONT = 0x0030
 WS_VISIBLE = 0x10000000
@@ -24,6 +25,8 @@ WS_EX_CLIENTEDGE = 0x00000200
 WS_CAPTION = 0x00C00000
 WS_SYSMENU = 0x00080000
 WS_MINIMIZEBOX = 0x00020000
+WS_MAXIMIZEBOX = 0x00010000
+WS_THICKFRAME = 0x00040000
 ES_MULTILINE = 0x0004
 ES_AUTOVSCROLL = 0x0040
 ES_READONLY = 0x0800
@@ -136,6 +139,17 @@ def launch_report_window() -> None:
     user32.SendMessageW.restype = LRESULT
     user32.SetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPCWSTR]
     user32.SetWindowTextW.restype = wintypes.BOOL
+    user32.MoveWindow.argtypes = [
+        wintypes.HWND,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        wintypes.BOOL,
+    ]
+    user32.MoveWindow.restype = wintypes.BOOL
+    user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    user32.GetClientRect.restype = wintypes.BOOL
     user32.DestroyWindow.argtypes = [wintypes.HWND]
     user32.DestroyWindow.restype = wintypes.BOOL
     user32.PostQuitMessage.argtypes = [ctypes.c_int]
@@ -161,6 +175,75 @@ def launch_report_window() -> None:
     instance = kernel32.GetModuleHandleW(None)
     default_font = gdi32.GetStockObject(DEFAULT_GUI_FONT)
     controls: dict[str, int] = {}
+
+    def layout(client_width: int, client_height: int) -> None:
+        if "today_group" not in controls:
+            return
+
+        margin = 24
+        inner_margin = 24
+        section_gap = 14
+        content_width = max(320, client_width - (margin * 2))
+        inner_width = max(272, content_width - (inner_margin * 2))
+        today_height = 108
+        apps_height = 146
+        footer_height = 54
+
+        today_y = margin
+        apps_y = today_y + today_height + section_gap
+        history_y = apps_y + apps_height + section_gap
+        history_height = max(120, client_height - history_y - footer_height)
+        footer_y = client_height - 42
+
+        user32.MoveWindow(
+            controls["today_group"], margin, today_y, content_width, today_height, True
+        )
+        user32.MoveWindow(
+            controls["today"], margin + inner_margin, today_y + 32, inner_width, 22, True
+        )
+        user32.MoveWindow(
+            controls["tracked"], margin + inner_margin, today_y + 58, inner_width, 22, True
+        )
+        user32.MoveWindow(
+            controls["idle"], margin + inner_margin, today_y + 84, inner_width, 22, True
+        )
+
+        user32.MoveWindow(
+            controls["apps_group"], margin, apps_y, content_width, apps_height, True
+        )
+        user32.MoveWindow(
+            controls["apps"],
+            margin + inner_margin,
+            apps_y + 28,
+            inner_width,
+            apps_height - 52,
+            True,
+        )
+
+        user32.MoveWindow(
+            controls["history_group"],
+            margin,
+            history_y,
+            content_width,
+            history_height,
+            True,
+        )
+        user32.MoveWindow(
+            controls["history"],
+            margin + inner_margin,
+            history_y + 28,
+            inner_width,
+            max(68, history_height - 52),
+            True,
+        )
+
+        user32.MoveWindow(controls["live_timer"], margin, footer_y, 160, 30, True)
+        right = client_width - margin
+        user32.MoveWindow(controls["close"], right - 64, footer_y, 64, 30, True)
+        right -= 74
+        user32.MoveWindow(controls["minimize"], right - 116, footer_y, 116, 30, True)
+        right -= 126
+        user32.MoveWindow(controls["refresh"], right - 94, footer_y, 94, 30, True)
 
     def refresh() -> None:
         today = get_today_stats()
@@ -197,6 +280,9 @@ def launch_report_window() -> None:
                 if command_id in {MINIMIZE_TO_TRAY_BUTTON_ID, CLOSE_BUTTON_ID}:
                     user32.DestroyWindow(hwnd)
                     return 0
+            if message == WM_SIZE:
+                layout(l_param & 0xFFFF, (l_param >> 16) & 0xFFFF)
+                return 0
             if message == WM_SYSCOMMAND and (w_param & 0xFFF0) == SC_MINIMIZE:
                 # The tray tracker remains running and can reopen this report.
                 user32.DestroyWindow(hwnd)
@@ -217,7 +303,13 @@ def launch_report_window() -> None:
     if not user32.RegisterClassW(ctypes.byref(window_class)):
         raise ctypes.WinError()
 
-    window_style = WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
+    window_style = (
+        WS_CAPTION
+        | WS_SYSMENU
+        | WS_MINIMIZEBOX
+        | WS_MAXIMIZEBOX
+        | WS_THICKFRAME
+    )
     hwnd = user32.CreateWindowExW(
         0,
         WINDOW_CLASS_NAME,
@@ -256,12 +348,22 @@ def launch_report_window() -> None:
         user32.SendMessageW(control, WM_SETFONT, default_font, True)
         return control
 
-    create_control("BUTTON", "Today", WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 24, 24, 576, 108)
+    controls["today_group"] = create_control(
+        "BUTTON", "Today", WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 24, 24, 576, 108
+    )
     controls["today"] = create_control("STATIC", "", WS_CHILD | WS_VISIBLE, 48, 56, 500, 22)
     controls["tracked"] = create_control("STATIC", "", WS_CHILD | WS_VISIBLE, 48, 82, 500, 22)
     controls["idle"] = create_control("STATIC", "", WS_CHILD | WS_VISIBLE, 48, 108, 500, 22)
 
-    create_control("BUTTON", "Most Used Applications", WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 24, 146, 576, 146)
+    controls["apps_group"] = create_control(
+        "BUTTON",
+        "Most Used Applications",
+        WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+        24,
+        146,
+        576,
+        146,
+    )
     controls["apps"] = create_control(
         "EDIT",
         "",
@@ -273,7 +375,9 @@ def launch_report_window() -> None:
         ex_style=WS_EX_CLIENTEDGE,
     )
 
-    create_control("BUTTON", "Daily History", WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 24, 306, 576, 202)
+    controls["history_group"] = create_control(
+        "BUTTON", "Daily History", WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 24, 306, 576, 202
+    )
     controls["history"] = create_control(
         "EDIT",
         "",
@@ -284,7 +388,9 @@ def launch_report_window() -> None:
         150,
         ex_style=WS_EX_CLIENTEDGE,
     )
-    create_control("BUTTON", "Refresh", WS_CHILD | WS_VISIBLE, 282, 526, 94, 30, REFRESH_BUTTON_ID)
+    controls["refresh"] = create_control(
+        "BUTTON", "Refresh", WS_CHILD | WS_VISIBLE, 282, 526, 94, 30, REFRESH_BUTTON_ID
+    )
     controls["live_timer"] = create_control(
         "BUTTON",
         "Show live timer",
@@ -297,7 +403,7 @@ def launch_report_window() -> None:
     )
     if is_live_timer_enabled():
         user32.SendMessageW(controls["live_timer"], BM_SETCHECK, BST_CHECKED, 0)
-    create_control(
+    controls["minimize"] = create_control(
         "BUTTON",
         "Minimize to tray",
         WS_CHILD | WS_VISIBLE,
@@ -307,8 +413,13 @@ def launch_report_window() -> None:
         30,
         MINIMIZE_TO_TRAY_BUTTON_ID,
     )
-    create_control("BUTTON", "Close", WS_CHILD | WS_VISIBLE, 512, 526, 64, 30, CLOSE_BUTTON_ID)
+    controls["close"] = create_control(
+        "BUTTON", "Close", WS_CHILD | WS_VISIBLE, 512, 526, 64, 30, CLOSE_BUTTON_ID
+    )
 
+    client_rect = wintypes.RECT()
+    if user32.GetClientRect(hwnd, ctypes.byref(client_rect)):
+        layout(client_rect.right - client_rect.left, client_rect.bottom - client_rect.top)
     refresh()
     user32.ShowWindow(hwnd, SW_SHOW)
     user32.UpdateWindow(hwnd)

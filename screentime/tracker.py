@@ -15,6 +15,7 @@ from .live_timer import LiveTimerController
 from .paths import DATA_DIR, LOG_PATH
 from .report import open_report
 from .reporting import format_minutes, get_today_stats
+from .settings import is_live_timer_enabled, set_live_timer_enabled
 from .updates import check_for_update, download_update, get_available_update, is_check_due
 
 SAMPLE_INTERVAL_SECONDS = 60
@@ -136,11 +137,11 @@ class TrackerService:
                 break
 
 
-def _seconds_until_next_minute() -> int:
+def _seconds_until_next_minute() -> float:
     current_time = time.time()
     remainder = current_time % SAMPLE_INTERVAL_SECONDS
-    delay = int(SAMPLE_INTERVAL_SECONDS - remainder)
-    return max(1, delay)
+    delay = SAMPLE_INTERVAL_SECONDS - remainder
+    return max(0.05, delay)
 
 
 def _open_report_from_tray(icon: pystray.Icon, item: pystray.MenuItem) -> None:
@@ -220,6 +221,17 @@ def _check_for_updates_on_start(icon: pystray.Icon) -> None:
         _check_for_updates(icon, False)
 
 
+def _toggle_live_timer(icon: pystray.Icon, item: pystray.MenuItem) -> None:
+    del item
+    set_live_timer_enabled(not is_live_timer_enabled())
+    icon.update_menu()
+
+
+def _is_live_timer_checked(item: pystray.MenuItem) -> bool:
+    del item
+    return is_live_timer_enabled()
+
+
 def _quit_from_tray(service: TrackerService):
     def handler(icon: pystray.Icon, item: pystray.MenuItem) -> None:
         del item
@@ -252,6 +264,11 @@ def run_tray_app() -> None:
     menu = pystray.Menu(
         pystray.MenuItem(_today_total_label, None, enabled=False),
         pystray.MenuItem("Open report", _open_report_from_tray, default=True),
+        pystray.MenuItem(
+            "Show live timer",
+            _toggle_live_timer,
+            checked=_is_live_timer_checked,
+        ),
         pystray.MenuItem(_update_label, _check_for_updates_from_tray),
         pystray.MenuItem("Install update", _install_update_from_tray(service), visible=_has_update),
         pystray.MenuItem("Quit", _quit_from_tray(service)),

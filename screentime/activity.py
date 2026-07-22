@@ -129,8 +129,10 @@ def sanitize_window_title(app_name: str, window_title: str) -> str:
 def normalize_app_name(process_name: str) -> str:
     """Turn executable names into stable, readable labels for reports."""
     filename = Path(process_name).name
-    stem = Path(filename).stem
+    stem = filename[:-4] if filename.lower().endswith(".exe") else filename
     normalized_key = stem.lower()
+    if re.fullmatch(r"pythonw?(?:\d+(?:\.\d+)*)?", normalized_key):
+        return "Python"
     if normalized_key in APP_NAME_ALIASES:
         return APP_NAME_ALIASES[normalized_key]
 

@@ -15,6 +15,13 @@ class FocusPrivacyTests(unittest.TestCase):
         self.assertEqual(normalize_app_name("ChatGPT.exe"), "ChatGPT")
         self.assertEqual(normalize_app_name("my_notes_app.exe"), "My Notes App")
 
+    def test_versioned_python_names_share_one_label(self) -> None:
+        self.assertEqual(normalize_app_name("pythonw3.13.exe"), "Python")
+        self.assertEqual(normalize_app_name("Pythonw3.13"), "Python")
+
+    def test_display_names_keep_meaningful_dots(self) -> None:
+        self.assertEqual(normalize_app_name("Tetr.Io"), "Tetr.Io")
+
 
 if __name__ == "__main__":
     unittest.main()

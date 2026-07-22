@@ -4,6 +4,7 @@ import os
 import threading
 import time
 from ctypes import wintypes
+from datetime import date
 
 from .activity import get_idle_seconds
 from .reporting import get_today_stats
@@ -21,6 +22,11 @@ HTCAPTION = 2
 WS_POPUP = 0x80000000
 WS_EX_LAYERED = 0x00080000
 WS_EX_TOOLWINDOW = 0x00000080
+WS_EX_NOACTIVATE = 0x08000000
+WS_EX_TOPMOST = 0x00000008
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SWP_NOACTIVATE = 0x0010
 SWP_SHOWWINDOW = 0x0040
 HWND_TOPMOST = wintypes.HWND(-1)
 LWA_COLORKEY = 0x00000001
@@ -33,13 +39,11 @@ SPI_GETWORKAREA = 0x0030
 SM_CXSCREEN = 0
 
 ACTIVE_IDLE_THRESHOLD_SECONDS = 5 * 60
-TIMER_WIDTH = 360
-TIMER_HEIGHT = 108
-TIMER_MARGIN = 28
-TIMER_COLOR_KEY = 0x0000FF00
-TIMER_SHADOW_COLOR = 0x00000000
-# Tahoma's chunky Windows XP-era look keeps the overlay close to a classic FRAPS HUD.
-TIMER_TEXT_COLOR = 0x0000D7FF
+TIMER_WIDTH = 172
+TIMER_HEIGHT = 48
+TIMER_MARGIN = 16
+TIMER_TRANSPARENT_COLOR = 0x00010001
+TIMER_TEXT_COLOR = 0x00F2F2F2
 
 LRESULT = ctypes.c_ssize_t
 WNDPROC = ctypes.WINFUNCTYPE(
@@ -86,8 +90,31 @@ def format_timer(total_seconds: int) -> str:
 def consume_elapsed_seconds(remainder: float, elapsed: float) -> tuple[int, float]:
     """Convert fractional loop time into whole display seconds without losing time."""
     total = max(0.0, remainder) + max(0.0, elapsed)
-    completed_seconds = int(total)
-    return completed_seconds, total - completed_seconds
+    completed_seconds = int(total + 1e-9)
+    return completed_seconds, max(0.0, total - completed_seconds)
+
+
+class ActiveTimeClock:
+    """Keep the live total independent from the optional overlay window."""
+
+    def __init__(self, initial_seconds: int = 0) -> None:
+        self.total_seconds = max(0, int(initial_seconds))
+        self.remainder = 0.0
+
+    def advance(self, elapsed: float, is_active: bool) -> int:
+        if not is_active:
+            return self.total_seconds
+
+        completed_seconds, self.remainder = consume_elapsed_seconds(
+            self.remainder,
+            elapsed,
+        )
+        self.total_seconds += completed_seconds
+        return self.total_seconds
+
+    def reconcile(self, database_seconds: int) -> int:
+        self.total_seconds = max(self.total_seconds, max(0, int(database_seconds)))
+        return self.total_seconds
 
 
 class LiveTimerOverlay:
@@ -159,11 +186,11 @@ class LiveTimerOverlay:
             return user32.DefWindowProcW(hwnd, message, w_param, l_param)
 
         self._window_proc = window_proc
-        self.background_brush = gdi32.CreateSolidBrush(TIMER_COLOR_KEY)
+        self.background_brush = gdi32.CreateSolidBrush(TIMER_TRANSPARENT_COLOR)
         if not self.background_brush:
             raise ctypes.WinError()
         self.font_handle = gdi32.CreateFontW(
-            52, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 0, 0, "Tahoma"
+            24, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 0, 0, "Segoe UI"
         )
         if not self.font_handle:
             raise ctypes.WinError()
@@ -180,7 +207,7 @@ class LiveTimerOverlay:
         try:
             x, y = self._top_right_position(user32)
             hwnd = user32.CreateWindowExW(
-                WS_EX_LAYERED | WS_EX_TOOLWINDOW,
+                WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST,
                 class_name,
                 WINDOW_TITLE,
                 WS_POPUP,
@@ -197,7 +224,12 @@ class LiveTimerOverlay:
                 raise ctypes.WinError()
 
             self.hwnd = hwnd
-            if not user32.SetLayeredWindowAttributes(hwnd, TIMER_COLOR_KEY, 0, LWA_COLORKEY):
+            if not user32.SetLayeredWindowAttributes(
+                hwnd,
+                TIMER_TRANSPARENT_COLOR,
+                255,
+                LWA_COLORKEY,
+            ):
                 raise ctypes.WinError()
             if not user32.SetWindowPos(
                 hwnd,
@@ -206,16 +238,12 @@ class LiveTimerOverlay:
                 y,
                 TIMER_WIDTH,
                 TIMER_HEIGHT,
-                SWP_SHOWWINDOW,
+                SWP_SHOWWINDOW | SWP_NOACTIVATE,
             ):
                 raise ctypes.WinError()
 
-            display_seconds = int(get_today_stats()["active_minutes"] * 60)
-            last_database_seconds = display_seconds
-            last_database_refresh = 0.0
-            last_tick = time.monotonic()
-            elapsed_remainder = 0.0
             message = wintypes.MSG()
+            last_topmost_refresh = time.monotonic()
 
             while not self.stop_event.is_set():
                 while user32.PeekMessageW(
@@ -225,29 +253,19 @@ class LiveTimerOverlay:
                     user32.DispatchMessageW(ctypes.byref(message))
 
                 now = time.monotonic()
-                if now - last_database_refresh >= 30:
-                    database_seconds = int(get_today_stats()["active_minutes"] * 60)
-                    display_seconds = max(display_seconds, database_seconds)
-                    last_database_seconds = database_seconds
-                    last_database_refresh = now
+                if now - last_topmost_refresh >= 1:
+                    if not user32.SetWindowPos(
+                        hwnd,
+                        HWND_TOPMOST,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    ):
+                        logging.warning("Could not refresh live timer topmost status")
+                    last_topmost_refresh = now
 
-                elapsed = max(0.0, now - last_tick)
-                last_tick = now
-                if get_idle_seconds() < ACTIVE_IDLE_THRESHOLD_SECONDS:
-                    completed_seconds, elapsed_remainder = consume_elapsed_seconds(
-                        elapsed_remainder,
-                        elapsed,
-                    )
-                    if completed_seconds:
-                        display_seconds = max(
-                            display_seconds + completed_seconds,
-                            last_database_seconds,
-                        )
-                        elapsed_remainder -= completed_seconds
-                else:
-                    elapsed_remainder = 0.0
-
-                self.display_text = format_timer(display_seconds)
                 user32.InvalidateRect(hwnd, None, True)
                 self.stop_event.wait(0.25)
         finally:
@@ -410,15 +428,6 @@ class LiveTimerOverlay:
                 gdi32.SelectObject(hdc, self.font_handle)
             gdi32.SetBkMode(hdc, TRANSPARENT)
 
-            shadow_bounds = wintypes.RECT(2, 3, TIMER_WIDTH + 2, TIMER_HEIGHT + 3)
-            gdi32.SetTextColor(hdc, TIMER_SHADOW_COLOR)
-            user32.DrawTextW(
-                hdc,
-                self.display_text,
-                -1,
-                ctypes.byref(shadow_bounds),
-                DT_CENTER | DT_VCENTER | DT_SINGLELINE,
-            )
             gdi32.SetTextColor(hdc, TIMER_TEXT_COLOR)
             user32.DrawTextW(
                 hdc,
@@ -456,9 +465,46 @@ class LiveTimerController:
         self.thread = None
 
     def _run(self) -> None:
+        current_day = date.today()
+        database_seconds = int(get_today_stats()["active_minutes"] * 60)
+        clock = ActiveTimeClock(database_seconds)
+        self.overlay.display_text = format_timer(clock.total_seconds)
+        last_tick = time.monotonic()
+        last_database_refresh = last_tick
+        last_setting_check = 0.0
+
         while not self.stop_event.is_set():
-            if is_live_timer_enabled():
-                self.overlay.start()
-            else:
-                self.overlay.stop()
-            self.stop_event.wait(1)
+            now = time.monotonic()
+            elapsed = max(0.0, now - last_tick)
+            last_tick = now
+
+            today = date.today()
+            if today != current_day:
+                current_day = today
+                database_seconds = int(get_today_stats()["active_minutes"] * 60)
+                clock = ActiveTimeClock(database_seconds)
+                last_database_refresh = now
+
+            try:
+                is_active = get_idle_seconds() < ACTIVE_IDLE_THRESHOLD_SECONDS
+            except Exception as exc:
+                logging.exception("Live timer idle check failed: %s", exc)
+                is_active = False
+
+            clock.advance(elapsed, is_active)
+
+            if now - last_database_refresh >= 30:
+                database_seconds = int(get_today_stats()["active_minutes"] * 60)
+                clock.reconcile(database_seconds)
+                last_database_refresh = now
+
+            self.overlay.display_text = format_timer(clock.total_seconds)
+
+            if now - last_setting_check >= 1:
+                if is_live_timer_enabled():
+                    self.overlay.start()
+                else:
+                    self.overlay.stop()
+                last_setting_check = now
+
+            self.stop_event.wait(0.25)

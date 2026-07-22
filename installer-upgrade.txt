@@ -1,0 +1,7 @@
+UPGRADING SCREEN TIME TRACKER
+
+Setup will remove the previously installed version before copying the new release. This prevents old executables, startup entries, and Start menu shortcuts from remaining beside the new version.
+
+Before continuing, close Screen Time Tracker and its report window. If Setup cannot remove the old version automatically, it will stop and tell you to uninstall Screen Time Tracker from Windows Settings > Apps > Installed apps before running Setup again.
+
+Your screen-time history and preferences are stored separately in your local application-data folder. Removing the old program version does not delete that data.
