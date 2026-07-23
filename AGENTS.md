@@ -16,9 +16,10 @@ Use this session-start prompt:
 
 ## Current development phase
 
-- **v1.2.0 release is explicitly authorized and in progress.**
-- The authorized release sequence is: update metadata and notes, run the full suite, build and verify executables and installer, push the source and `v1.2.0` tag, then publish and verify the GitHub release.
-- Do not make unrelated feature changes while release validation is in progress.
+- **v1.2.0 was released on July 22, 2026.**
+- The release tag is `v1.2.0`; the published installer is attached to the GitHub release.
+- No later development or release phase is active until the user explicitly starts one.
+- Do not bump the version or rebuild release artifacts without a newly authorized development/release phase.
 
 ## Product vision
 
@@ -120,12 +121,12 @@ py -3 tracker.pyw
 py -3 report.pyw
 ```
 
-Do not run release publishing as routine verification. During active v1.2 feature work, do not rebuild executables or the installer unless the user explicitly requests a build at that time.
+Do not run release publishing as routine verification. During feature work, do not rebuild executables or the installer unless the user explicitly requests a build at that time.
 
 ## Release discipline
 
 - `screentime/version.py` is the application version source of truth.
-- The required order for v1.2 is: finish feature work, receive explicit user confirmation that v1.2 is ready, update the version and release notes, run the full test suite, then rebuild the executables and installer.
+- The required order for every release is: finish feature work, receive explicit user confirmation that the version is ready, update the version and release notes, run the full test suite, then rebuild and verify the executables and installer before pushing the release tag.
 - Never rebuild or overwrite `dist/` or `installer-output/` preemptively during feature development, even when a change affects packaged behavior. Source-level verification is sufficient until the authorized release-build step.
 - Keep the installer upgrade notice and previous-version removal flow intact. If that flow changes, verify clean install, upgrade, failed-uninstall recovery, startup shortcut uniqueness, and user-data preservation before release.
 - Keep the updater compatible with numeric `vX.Y.Z` GitHub tags and the expected `ScreenTimeTracker-Setup.exe` asset unless coordinating a full release-protocol change.
